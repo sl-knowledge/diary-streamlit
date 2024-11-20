@@ -1,0 +1,13 @@
+# Only include app-specific dependencies here
+# Base dependencies are already installed in base.Dockerfile:
+# - streamlit
+# - pandas
+# - numpy
+# - python-dotenv
+# - markdown
+# - pypinyin
+# - translators
+# - yt-dlp
+# - jieba
+
+# Add your app-specific packages below:

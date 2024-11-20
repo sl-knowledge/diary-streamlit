@@ -1,0 +1,18 @@
+version: '3.8'
+services:
+  streamlit:
+    build: .
+    ports:
+      - "8501:8501"
+    volumes:
+      - .:/app
+      - streamlit_data:/app/data
+    environment:
+      - ENVIRONMENT=development
+    env_file:
+      - .env
+    restart: unless-stopped
+    command: streamlit run src/app.py --server.address 0.0.0.0 --server.runOnSave true
+
+volumes:
+  streamlit_data:
