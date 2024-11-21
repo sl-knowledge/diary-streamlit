@@ -1,10 +1,10 @@
 """语言管理器"""
 from typing import Dict, Optional
-from src.i18n import zh, en  # 添加英文导入
+from . import zh, en  # Changed from src.i18n
 
 class I18nManager:
     _instance = None
-    _current_lang = 'zh'  # 保持中文为默认语言
+    _current_lang = 'zh'  # Default to Chinese
     _translations: Dict[str, Dict[str, str]] = {
         'zh': zh.TRANSLATIONS,
         'en': en.TRANSLATIONS  # 添加英文翻译
