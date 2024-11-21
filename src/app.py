@@ -215,12 +215,7 @@ def check_password():
     return True
 
 def main():
-    # Add this before st.set_page_config
-    st.markdown("""
-        <link rel="stylesheet" href="https://cdn.staticfile.org/font-awesome/4.7.0/css/font-awesome.css">
-        <link rel="stylesheet" href="https://fonts.googleapis.cnpmjs.org/css2?family=Roboto:wght@400;500&display=swap">
-    """, unsafe_allow_html=True)
-    
+    # First, set page config before any other Streamlit commands
     st.set_page_config(
         page_title=t('app.title'), 
         layout="wide",
@@ -234,6 +229,24 @@ def main():
     # Add password check before showing content
     if not check_password():
         return
+    
+    # Then add custom CSS and fonts
+    st.markdown("""
+        <style>
+            /* Add Chinese font fallbacks */
+            * {
+                font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', 
+                            'Helvetica Neue', Arial, sans-serif !important;
+            }
+            
+            /* Optimize loading for Chinese users */
+            .stApp {
+                font-display: swap;
+            }
+        </style>
+        <link rel="stylesheet" href="https://cdn.staticfile.org/font-awesome/4.7.0/css/font-awesome.css">
+        <link rel="stylesheet" href="https://fonts.googleapis.cnpmjs.org/css2?family=Roboto:wght@400;500&display=swap">
+    """, unsafe_allow_html=True)
     
     # 添加语言切换器到右上角
     with st.container():
