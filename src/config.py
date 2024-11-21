@@ -20,5 +20,5 @@ class Config:
     
     def __init__(self):
         # Create necessary directories if they don't exist
-        self.DATA_DIR.mkdir(exist_ok=True)
-        self.UPLOAD_DIR.mkdir(exist_ok=True)
+        self.DATA_DIR.mkdir(exist_ok=True, mode=0o755)
+        self.UPLOAD_DIR.mkdir(exist_ok=True, mode=0o755)

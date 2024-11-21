@@ -36,28 +36,82 @@ def init_db():
 
 def init_directories():
     """Initialize required directories"""
-    Path("data").mkdir(exist_ok=True)
-    config.UPLOAD_DIR.mkdir(exist_ok=True)
+    try:
+        # Create base data directory
+        data_dir = Path("data")
+        data_dir.mkdir(exist_ok=True)
+        
+        # Create uploads directory
+        uploads_dir = data_dir / "uploads"
+        uploads_dir.mkdir(exist_ok=True)
+        
+        # Create .gitkeep file in uploads directory
+        gitkeep_file = uploads_dir / ".gitkeep"
+        gitkeep_file.touch(exist_ok=True)
+        
+        logger.debug(f"Created/verified directories: {data_dir}, {uploads_dir}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to create directories: {e}")
+        return False
 
 def save_uploaded_file(uploaded_file):
     """Save uploaded file and return the path"""
     if uploaded_file is None:
+        logger.error("No file provided")
         return None
         
-    # Create unique filename
-    file_extension = Path(uploaded_file.name).suffix.lower()
-    if file_extension not in ALLOWED_EXTENSIONS:
-        st.error(f"Unsupported file type: {file_extension}")
+    try:
+        # Debug logging
+        logger.debug(f"Attempting to save file: {uploaded_file.name}")
+        logger.debug(f"Upload directory: {config.UPLOAD_DIR}")
+        
+        # Ensure upload directory exists with proper permissions
+        config.UPLOAD_DIR.mkdir(exist_ok=True, parents=True)
+        logger.debug(f"Upload directory exists: {config.UPLOAD_DIR.exists()}")
+        logger.debug(f"Upload directory permissions: {oct(config.UPLOAD_DIR.stat().st_mode)[-3:]}")
+        
+        # Create unique filename
+        file_extension = Path(uploaded_file.name).suffix.lower()
+        if file_extension not in ALLOWED_EXTENSIONS:
+            logger.error(f"Unsupported file type: {file_extension}")
+            st.error(f"Unsupported file type: {file_extension}")
+            return None
+            
+        unique_filename = f"{uuid.uuid4()}{file_extension}"
+        file_path = config.UPLOAD_DIR / unique_filename
+        
+        # Debug file path
+        logger.debug(f"Generated file path: {file_path}")
+        
+        # Save the file using streamlit's built-in save method
+        try:
+            with open(file_path, "wb") as f:
+                f.write(uploaded_file.getbuffer())
+            logger.debug(f"File saved successfully to: {file_path}")
+            
+            # Verify file exists and has content
+            if file_path.exists():
+                file_size = file_path.stat().st_size
+                logger.debug(f"Saved file size: {file_size} bytes")
+                if file_size == 0:
+                    raise Exception("File was saved but is empty")
+            else:
+                raise Exception("File was not saved successfully")
+                
+            # Return relative path from data directory
+            relative_path = file_path.relative_to(config.DATA_DIR)
+            logger.debug(f"Returning relative path: {relative_path}")
+            return str(relative_path)
+            
+        except Exception as write_error:
+            logger.error(f"Error writing file: {write_error}")
+            raise Exception(f"Failed to write file: {write_error}")
+            
+    except Exception as e:
+        logger.error(f"Error saving uploaded file: {e}", exc_info=True)
+        st.error(f"Failed to save uploaded file: {str(e)}")
         return None
-        
-    unique_filename = f"{uuid.uuid4()}{file_extension}"
-    file_path = config.UPLOAD_DIR / unique_filename
-    
-    # Save the file
-    with open(file_path, "wb") as f:
-        shutil.copyfileobj(uploaded_file, f)
-        
-    return str(file_path.relative_to(Path("data")))
 
 def save_entry(title, content, uploaded_files, tags=None, mood=None, weather=None, location=None):
     """Save entry with attachments and tags"""
@@ -72,6 +126,8 @@ def save_entry(title, content, uploaded_files, tags=None, mood=None, weather=Non
                 path = save_uploaded_file(file)
                 if path:
                     attachment_paths.append(path)
+                else:
+                    raise Exception("Failed to save uploaded file")
         
         # Save entry to database
         db.execute('''
@@ -106,17 +162,23 @@ def save_entry(title, content, uploaded_files, tags=None, mood=None, weather=Non
                 ''', (entry_id, tag_id))
         
         db.commit()
+        return True
         
     except Exception as e:
         logger.error(f"Error saving entry: {e}")
         db.rollback()
-        raise
+        return False
     finally:
         db.close()
 
 def init_app():
     """Initialize application directories and database"""
     try:
+        # Initialize directories first
+        if not init_directories():
+            logger.error("Failed to initialize directories")
+            return False
+            
         # 使用 Config 实例的属性
         config.DATA_DIR.mkdir(exist_ok=True)
         config.UPLOAD_DIR.mkdir(exist_ok=True)
@@ -621,7 +683,7 @@ def show_editor():
     with col1:
         mood = st.selectbox(
             "心情",
-            ['开', '平静', '疲惫', '兴奋', '焦虑', '伤心'],
+            ['开心', '平静', '疲惫', '兴奋', '焦虑', '伤心'],
             index=None,
             placeholder="选择心情..."
         )
@@ -685,8 +747,11 @@ def show_editor():
             new_tag_list = [tag.strip() for tag in new_tags.split(',') if tag.strip()]
             all_tags.update(new_tag_list)
             
-        save_entry(title, content, uploaded_files, list(all_tags), mood, weather, location)
-        st.success(t('editor.save_success'))
+        # Save and show appropriate message
+        if save_entry(title, content, uploaded_files, list(all_tags), mood, weather, location):
+            st.success(t('editor.save_success'))
+        else:
+            st.error(t('editor.save_failed'))
 
 def show_clipper():
     st.title(t('clipper.title'))
@@ -758,7 +823,7 @@ def show_filtered_entries(filter_type, local_vars):
         query = """
             SELECT e.date, e.title, e.content, e.mood, e.weather, e.location,
                    GROUP_CONCAT(DISTINCT t.name) as tags,
-                   tp.keywords, tp.sentiment
+                   tp.keywords, tp.sentiment, e.attachments
             FROM entries e
             LEFT JOIN entry_tags et ON e.id = et.entry_id
             LEFT JOIN tags t ON et.tag_id = t.id
@@ -830,7 +895,7 @@ def show_filtered_entries(filter_type, local_vars):
         
         timeline_items = []
         for entry in entries:
-            date, title, content, mood, weather, location, tags, keywords, sentiment = entry
+            date, title, content, mood, weather, location, tags, keywords, sentiment, attachments = entry
             date_parts = date.split('-')
             
             # 转换为中文日期格式
@@ -838,7 +903,7 @@ def show_filtered_entries(filter_type, local_vars):
             weekday = dt.strftime('%w')  # 0 is Sunday, 6 is Saturday
             chinese_date = f"{zh_months[str(int(date_parts[1]))]} {int(date_parts[2])}日 {zh_weekdays[weekday]}"
             
-            # 根据是否是周末设置不同的背景颜色
+            # 根据是否是周末设置不���的背景颜色
             is_weekend = weekday in ['0', '6']
             background_color = '#fff5f5' if is_weekend else '#ffffff'  # 周末使用浅红色背景
             border_color = '#ffebee' if is_weekend else '#e0e0e0'     # 周末使用红色边框
@@ -913,6 +978,33 @@ def show_filtered_entries(filter_type, local_vars):
                     for tag in tag_list
                 ])
             
+            # Add attachments display
+            attachments_html = ''
+            if attachments:
+                try:
+                    attachment_list = json.loads(attachments)
+                    if attachment_list:
+                        attachments_html = '<div style="margin-top: 8px;">'
+                        for attachment in attachment_list:
+                            if any(attachment.lower().endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.gif']):
+                                # Convert file path to absolute path
+                                file_path = config.DATA_DIR / attachment
+                                if file_path.exists():
+                                    # Use base64 encoding to display the image
+                                    import base64
+                                    with open(file_path, "rb") as f:
+                                        img_data = base64.b64encode(f.read()).decode()
+                                        attachments_html += f'''
+                                            <img src="data:image/png;base64,{img_data}" 
+                                                 style="max-width: 100%; height: auto; margin: 4px 0; border-radius: 4px;"
+                                                 alt="Attachment">
+                                        '''
+                except json.JSONDecodeError:
+                    logger.error(f"Failed to parse attachments JSON: {attachments}")
+                except Exception as e:
+                    logger.error(f"Error loading image: {e}")
+            
+            # Add attachments to the timeline item content
             item = {
                 "start_date": {
                     "year": date_parts[0],
@@ -928,11 +1020,12 @@ def show_filtered_entries(filter_type, local_vars):
                             border-radius: 6px;
                             border: 1px solid {border_color};
                             font-size: 12px;
-                            max-height: 200px;
+                            max-height: none;  # Remove height limit for images
                             overflow: hidden;
                         ">
                             {meta_html}
                             {content_html}
+                            {attachments_html}  # Add attachments here
                             <div style="margin-top: 4px;">
                                 {tags_html}
                             </div>
@@ -1136,7 +1229,7 @@ def show_topic_wordcloud(start_date, end_date):
         words = jieba.cut(text)
         word_freq = {}
         for word in words:
-            if len(word.strip()) > 1:  # 只统计长度大于1的词
+            if len(word.strip()) > 1:  # 只统计长度大于1词
                 word_freq[word] = word_freq.get(word, 0) + 1
                 
         # 转换为pyecharts需要的格式
