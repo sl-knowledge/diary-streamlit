@@ -38,6 +38,10 @@ ENV/
 
 # Data directory
 data/
+# Ignore everything in uploads directory except .gitkeep
+data/uploads/*
+!data/uploads/.gitkeep
+
 
 # Misc
 .DS_Store

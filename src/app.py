@@ -121,18 +121,67 @@ def init_app():
         config.DATA_DIR.mkdir(exist_ok=True)
         config.UPLOAD_DIR.mkdir(exist_ok=True)
         
-        # 验证权限
-        if not os.access(config.DATA_DIR, os.W_OK):
-            logger.error(f"No write access to {config.DATA_DIR}")
-            raise PermissionError(f"No write access to {config.DATA_DIR}")
-            
+        # Check if database exists and has data
+        db = init_db()
+        if db:
+            cursor = db.execute("SELECT COUNT(*) FROM entries")
+            count = cursor.fetchone()[0]
+            if count == 0:
+                # No data exists, generate mock data
+                from mock_data import generate_mock_data
+                generate_mock_data()
+                logger.info("Generated mock data")
+            db.close()
+        
         return True
     except Exception as e:
         logger.error(f"Initialization error: {e}", exc_info=True)
         return False
 
+def check_password():
+    """Returns `True` if the user had the correct password."""
+    
+    def password_entered():
+        """Checks whether a password entered by the user is correct."""
+        if st.session_state["password"] == st.secrets["password"]:
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]  # Don't store password
+        else:
+            st.session_state["password_correct"] = False
+
+    if "password_correct" not in st.session_state:
+        st.session_state["password_correct"] = False
+
+    if not st.session_state["password_correct"]:
+        st.markdown("""
+            <style>
+                .stTextInput > div > div > input {
+                    width: 300px;
+                }
+                div[data-testid="stVerticalBlock"] > div:has(div.stTextInput) {
+                    display: flex;
+                    justify-content: center;
+                    margin-top: 100px;
+                }
+            </style>
+        """, unsafe_allow_html=True)
+        
+        st.markdown("<h1 style='text-align: center;'>日记本</h1>", unsafe_allow_html=True)
+        st.text_input(
+            "请输入访问密钥",
+            type="password",
+            on_change=password_entered,
+            key="password"
+        )
+        return False
+    return True
+
 def main():
     st.set_page_config(page_title=t('app.title'), layout="wide")
+    
+    # Add password check before showing content
+    if not check_password():
+        return
     
     # 添加语言切换器到右上角
     with st.container():
@@ -734,7 +783,7 @@ def show_filtered_entries(filter_type, local_vars):
                 <div style="
                     font-size: 12px;
                     font-weight: 500;
-                    color: {('#d32f2f' if is_weekend else '#1a237e')};  # 周末使用红色字体
+                    color: {('#d32f2f' if is_weekend else '#1a237e')};
                     margin-bottom: 4px;
                     font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei';
                     text-shadow: none;
@@ -743,9 +792,12 @@ def show_filtered_entries(filter_type, local_vars):
                     text-overflow: ellipsis;
                 ">{title}</div>
                 <div style="
-                    font-size: 10px;
+                    font-size: 11px;  # Slightly increased from 10px
                     color: {('#e57373' if is_weekend else '#666')};
-                    margin-bottom: 4px;
+                    margin: 6px 0;    # Added more vertical margin
+                    padding: 2px 0;   # Added padding
+                    border-bottom: 1px solid #eee;  # Added separator
+                    line-height: 1.4; # Added line height
                 ">{chinese_date}</div>
             '''
             
@@ -862,15 +914,24 @@ def show_filtered_entries(filter_type, local_vars):
                     height: 180px !important;  /* Increased height */
                 }
                 
-                /* 调整时间标记的高度 */
+                /* 调整时间标记的高度和间距 */
                 .tl-timemarker {
                     height: auto !important;
-                    min-height: 65px !important;  /* Increased height */
+                    min-height: 85px !important;  /* Increased from 65px */
+                    margin-bottom: 10px !important;  /* Added margin between markers */
                 }
                 
                 .tl-timemarker-content-container {
                     height: auto !important;
-                    min-height: 65px !important;  /* Increased height */
+                    min-height: 85px !important;  /* Increased from 65px */
+                    padding: 4px !important;      /* Added padding */
+                }
+                
+                /* 调整标题区域的样式 */
+                .tl-headline {
+                    padding: 4px 6px !important;  /* Increased padding */
+                    line-height: 1.4 !important;  /* Increased line height */
+                    margin-bottom: 4px !important;  /* Added margin */
                 }
                 
                 /* 优化时间轴上的日期显示 */
