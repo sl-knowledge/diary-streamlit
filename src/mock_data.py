@@ -182,6 +182,9 @@ def generate_mock_data():
         
         for i in range(31):
             current_date = start_date + timedelta(days=i)
+            # 使用标准日期格式 YYYY-MM-DD
+            date_str = current_date.strftime('%Y-%m-%d')
+            
             # 随机决定是否写日记（80%的概率）
             if random.random() < 0.8:
                 # 可能一天写多篇（20%的概率）
@@ -209,15 +212,15 @@ def generate_mock_data():
                     # 生成标题
                     title = f"{activity[:10]}..."
                     
-                    # 插入日记
+                    # 插入日记时使用标准格式日期
                     db.execute('''
                         INSERT INTO entries (
                             id, date, title, content, mood, weather, location,
                             created_at
                         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
-                        f"entry_{current_date.strftime('%Y%m%d')}_{_}",
-                        current_date.strftime('%Y-%m-%d'),
+                        f"entry_{date_str}_{_}",
+                        date_str,
                         title,
                         content,
                         mood,
@@ -238,8 +241,8 @@ def generate_mock_data():
                             id, entry_id, topic, keywords, sentiment
                         ) VALUES (?, ?, ?, ?, ?)
                     ''', (
-                        f"topic_{current_date.strftime('%Y%m%d')}_{_}",
-                        f"entry_{current_date.strftime('%Y%m%d')}_{_}",
+                        f"topic_{date_str}_{_}",
+                        f"entry_{date_str}_{_}",
                         random.choice(['日常', '工作', '学习', '生活感悟']),
                         json.dumps(keywords, ensure_ascii=False),
                         sentiment

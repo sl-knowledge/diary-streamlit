@@ -59,32 +59,60 @@ def save_uploaded_file(uploaded_file):
         
     return str(file_path.relative_to(Path("data")))
 
-def save_entry(title, content, uploaded_files):
-    """Save entry with attachments"""
+def save_entry(title, content, uploaded_files, tags=None, mood=None, weather=None, location=None):
+    """Save entry with attachments and tags"""
     db = init_db()
     entry_id = str(uuid.uuid4())
     
-    # Save uploaded files
-    attachment_paths = []
-    if uploaded_files:
-        for file in uploaded_files:
-            path = save_uploaded_file(file)
-            if path:
-                attachment_paths.append(path)
-    
-    # Save entry to database with correct fields
-    db.execute('''
-        INSERT INTO entries (id, date, title, content, attachments)
-        VALUES (?, ?, ?, ?, ?)
-    ''', (
-        entry_id,
-        datetime.now().strftime('%Y-%m-%d'),
-        title,
-        content,
-        json.dumps(attachment_paths)
-    ))
-    db.commit()
-    db.close()
+    try:
+        # Save uploaded files
+        attachment_paths = []
+        if uploaded_files:
+            for file in uploaded_files:
+                path = save_uploaded_file(file)
+                if path:
+                    attachment_paths.append(path)
+        
+        # Save entry to database
+        db.execute('''
+            INSERT INTO entries (id, date, title, content, attachments, mood, weather, location)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            entry_id,
+            datetime.now().strftime('%Y-%m-%d'),
+            title,
+            content,
+            json.dumps(attachment_paths),
+            mood,
+            weather,
+            location
+        ))
+        
+        # Save tags
+        if tags:
+            for tag in tags:
+                # First, ensure the tag exists in the tags table
+                db.execute('INSERT OR IGNORE INTO tags (id, name) VALUES (?, ?)', 
+                         (str(uuid.uuid4()), tag))
+                
+                # Get the tag_id
+                cursor = db.execute('SELECT id FROM tags WHERE name = ?', (tag,))
+                tag_id = cursor.fetchone()[0]
+                
+                # Link the tag to the entry
+                db.execute('''
+                    INSERT INTO entry_tags (entry_id, tag_id)
+                    VALUES (?, ?)
+                ''', (entry_id, tag_id))
+        
+        db.commit()
+        
+    except Exception as e:
+        logger.error(f"Error saving entry: {e}")
+        db.rollback()
+        raise
+    finally:
+        db.close()
 
 def init_app():
     """Initialize application directories and database"""
@@ -474,6 +502,49 @@ def show_editor():
     title = st.text_input(t('editor.entry_title'))
     content = st.text_area(t('editor.content'), height=300)
     
+    # Add mood, weather, and location selectors
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        mood = st.selectbox(
+            "心情",
+            ['开心', '平静', '疲惫', '兴奋', '焦虑', '伤心'],
+            index=None,
+            placeholder="选择心情..."
+        )
+    with col2:
+        weather = st.selectbox(
+            "天气",
+            ['晴朗', '多云', '小雨', '阴天', '大晴天'],
+            index=None,
+            placeholder="选择天气..."
+        )
+    with col3:
+        location = st.selectbox(
+            "位置",
+            ['家里', '公司', '咖啡馆', '图书馆', '公园'],
+            index=None,
+            placeholder="选择位置..."
+        )
+    
+    # Tags input
+    # Get existing tags for autocomplete
+    existing_tags = get_all_tags()
+    
+    # Allow multiple tag selection with autocomplete
+    selected_tags = st.multiselect(
+        "标签",
+        options=existing_tags,
+        placeholder="选择或输入新标签...",
+        help="可以选择已有标签或输入新标签，多个标签用逗号分隔"
+    )
+    
+    # Additional free-form tags input
+    new_tags = st.text_input(
+        "新标签",
+        placeholder="输入新标签，多个标签用逗号分隔",
+        help="输入新标签，用逗号分隔多个标签"
+    )
+    
     # Attachments with preview
     uploaded_files = st.file_uploader(
         t('editor.add_images'), 
@@ -492,7 +563,15 @@ def show_editor():
         if not title:
             st.error(t('editor.title_required'))
             return
-        save_entry(title, content, uploaded_files)
+            
+        # Process tags
+        all_tags = set(selected_tags)
+        if new_tags:
+            # Split new tags by comma and strip whitespace
+            new_tag_list = [tag.strip() for tag in new_tags.split(',') if tag.strip()]
+            all_tags.update(new_tag_list)
+            
+        save_entry(title, content, uploaded_files, list(all_tags), mood, weather, location)
         st.success(t('editor.save_success'))
 
 def show_clipper():
@@ -593,18 +672,46 @@ def show_filtered_entries(filter_type, local_vars):
             st.info(t('timeline.no_entries'))
             return
             
-        # 中文月份和星期映射
+        # 更新中文日期格式映射
         zh_months = {
             '1': '一月', '2': '二月', '3': '三月', '4': '四月',
             '5': '五月', '6': '六月', '7': '七月', '8': '八月',
             '9': '九月', '10': '十月', '11': '十一月', '12': '十二月'
         }
         
-        # 修改时间线项目的样式
+        zh_weekdays = {
+            '0': '周日', '1': '周一', '2': '周二', '3': '周三',
+            '4': '周四', '5': '周五', '6': '周六'
+        }
+        
         timeline_items = []
         for entry in entries:
             date, title, content, mood, weather, location, tags, keywords, sentiment = entry
             date_parts = date.split('-')
+            
+            # 转换为中文日期格式
+            dt = datetime.strptime(date, '%Y-%m-%d')
+            chinese_date = f"{zh_months[str(int(date_parts[1]))]} {int(date_parts[2])}日 {zh_weekdays[dt.strftime('%w')]}"
+            
+            # 在标题中添加中文日期
+            title_html = f'''
+                <div style="
+                    font-size: 12px;
+                    font-weight: 500;
+                    color: #1a237e;
+                    margin-bottom: 4px;
+                    font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei';
+                    text-shadow: none;
+                    white-space: nowrap;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                ">{title}</div>
+                <div style="
+                    font-size: 10px;
+                    color: #666;
+                    margin-bottom: 4px;
+                ">{chinese_date}</div>
+            '''
             
             # 内容区域使用较大的字体，但保持其他元素小巧
             content_html = f'''
@@ -623,21 +730,6 @@ def show_filtered_entries(filter_type, local_vars):
                     padding: 8px;
                     border-radius: 4px;
                 ">{content}</div>
-            '''
-            
-            # Keep the title and meta info small
-            title_html = f'''
-                <div style="
-                    font-size: 12px;
-                    font-weight: 500;
-                    color: #1a237e;
-                    margin-bottom: 4px;
-                    font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei';
-                    text-shadow: none;
-                    white-space: nowrap;
-                    overflow: hidden;
-                    text-overflow: ellipsis;
-                ">{title}</div>
             '''
             
             # Keep meta info and tags small
