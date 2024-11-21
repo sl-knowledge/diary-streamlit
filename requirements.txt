@@ -1,17 +1,7 @@
-# Only include app-specific dependencies here
-# Base dependencies are already installed in base.Dockerfile:
-# - streamlit
-# - pandas
-# - numpy
-# - python-dotenv
-# - markdown
-# - pypinyin
-# - translators
-# - yt-dlp
-# - jieba
-
-# Add your app-specific packages below:
-streamlit
-plotly
-watchdog
-python-dotenv
+streamlit==1.31.1
+streamlit-timeline==0.0.2
+plotly==5.18.0
+streamlit-echarts==0.4.0
+pyecharts==2.0.4
+jieba==0.42.1
+st-annotated-text==4.0.1

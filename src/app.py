@@ -7,15 +7,21 @@ import uuid
 import shutil
 import logging
 import os
-from src.config import Config
-from src.i18n.manager import t, I18nManager
+from config import Config
+from i18n.manager import t, I18nManager
+from streamlit_timeline import timeline
+from annotated_text import annotated_text
+
+# 设置 watchdog 的日志级别为 WARNING，减少调试输出
+logging.getLogger('watchdog').setLevel(logging.WARNING)
+
+# 保持我们应用的日志级别不变
+logging.basicConfig(level=logging.DEBUG if Config.DEBUG else logging.INFO)
+logger = logging.getLogger(__name__)
 
 # 使用 Config 类的属性
 config = Config()
 ALLOWED_EXTENSIONS = config.APP_CONFIG['allowed_extensions']
-
-logging.basicConfig(level=logging.DEBUG if Config.DEBUG else logging.INFO)
-logger = logging.getLogger(__name__)
 
 def init_db():
     """Initialize database connection"""
@@ -138,6 +144,25 @@ def main():
 def show_timeline():
     st.title(t('timeline.title'))
     
+    # Get the date range from database
+    db = init_db()
+    if db:
+        try:
+            cursor = db.execute("""
+                SELECT MIN(date), MAX(date) 
+                FROM entries
+            """)
+            min_date, max_date = cursor.fetchone()
+            min_date = datetime.strptime(min_date, '%Y-%m-%d').date() if min_date else datetime.now().date()
+            max_date = datetime.strptime(max_date, '%Y-%m-%d').date() if max_date else datetime.now().date()
+        except Exception as e:
+            logger.error(f"Error getting date range: {e}")
+            min_date = max_date = datetime.now().date()
+        finally:
+            db.close()
+    else:
+        min_date = max_date = datetime.now().date()
+    
     # 侧边栏过滤器
     with st.sidebar:
         st.subheader(t('timeline.filters'))
@@ -153,8 +178,18 @@ def show_timeline():
         )
         
         if filter_type == t('timeline.date_range'):
-            start_date = st.date_input(t('timeline.start_date'))
-            end_date = st.date_input(t('timeline.end_date'))
+            start_date = st.date_input(
+                t('timeline.start_date'),
+                value=min_date,  # Set default to earliest entry
+                min_value=min_date,  # Limit range to actual data
+                max_value=max_date
+            )
+            end_date = st.date_input(
+                t('timeline.end_date'),
+                value=max_date,  # Set default to latest entry
+                min_value=min_date,
+                max_value=max_date
+            )
         elif filter_type == t('timeline.tags'):
             tags = get_all_tags()
             selected_tags = st.multiselect(t('timeline.select_tags'), tags)
@@ -181,17 +216,42 @@ def show_insights():
     """Display insights from journal entries"""
     st.subheader(t('insights.title'))
     
-    # 时间范围选择 - 添加唯一的 key
+    # Get the date range from database
+    db = init_db()
+    if db:
+        try:
+            cursor = db.execute("""
+                SELECT MIN(date), MAX(date) 
+                FROM entries
+            """)
+            min_date, max_date = cursor.fetchone()
+            min_date = datetime.strptime(min_date, '%Y-%m-%d').date() if min_date else datetime.now().date()
+            max_date = datetime.strptime(max_date, '%Y-%m-%d').date() if max_date else datetime.now().date()
+        except Exception as e:
+            logger.error(f"Error getting date range: {e}")
+            min_date = max_date = datetime.now().date()
+        finally:
+            db.close()
+    else:
+        min_date = max_date = datetime.now().date()
+    
+    # 时间范围选择 - 使用数据库中的最早日期作为默认值
     col1, col2 = st.columns(2)
     with col1:
         start_date = st.date_input(
             t('insights.period_start'),
-            key='insights_start_date'  # 添加唯一key
+            value=min_date,  # Set default to earliest entry
+            min_value=min_date,  # Limit range to actual data
+            max_value=max_date,
+            key='insights_start_date'
         )
     with col2:
         end_date = st.date_input(
             t('insights.period_end'),
-            key='insights_end_date'  # 添加唯一key
+            value=max_date,  # Set default to latest entry
+            min_value=min_date,
+            max_value=max_date,
+            key='insights_end_date'
         )
     
     if start_date and end_date:
@@ -246,7 +306,7 @@ def show_mood_trends(start_date, end_date):
             st.error(t('error.db_connect'))
             return
             
-        # 查询情绪数据
+        # Query data
         query = """
             SELECT date, mood, COUNT(*) as count
             FROM entries
@@ -262,11 +322,67 @@ def show_mood_trends(start_date, end_date):
             st.info(t('insights.no_mood_data'))
             return
             
-        # 使用 plotly 绘制情绪趋势图
-        import plotly.graph_objects as go
+        # Use pyecharts
+        from pyecharts import options as opts
+        from pyecharts.charts import Line
+        from streamlit_echarts import st_pyecharts
         
-        # 处理数据...
-        st.plotly_chart(fig)
+        # Prepare data
+        dates = sorted(list(set(row[0] for row in data)))
+        moods = sorted(list(set(row[1] for row in data)))
+        
+        # Create line chart
+        line = Line()
+        line.add_xaxis(dates)
+        
+        # Color mapping
+        colors = ['#FF9800', '#4CAF50', '#9E9E9E', '#F44336', '#673AB7', '#2196F3']
+        
+        for idx, mood in enumerate(moods):
+            y_data = []
+            for date in dates:
+                count = 0
+                for row in data:
+                    if row[0] == date and row[1] == mood:
+                        count = row[2]
+                        break
+                y_data.append(count)
+            
+            line.add_yaxis(
+                series_name=mood,
+                y_axis=y_data,
+                symbol_size=8,
+                itemstyle_opts=opts.ItemStyleOpts(color=colors[idx % len(colors)]),
+                label_opts=opts.LabelOpts(is_show=False),
+            )
+        
+        line.set_global_opts(
+            title_opts=opts.TitleOpts(
+                title="情绪变化趋势",
+                subtitle=f"从 {start_date} 到 {end_date}",
+                title_textstyle_opts=opts.TextStyleOpts(font_family="Microsoft YaHei"),
+            ),
+            xaxis_opts=opts.AxisOpts(
+                type_="category",
+                name="日期",
+                name_location="end",
+                axislabel_opts=opts.LabelOpts(rotate=45),
+            ),
+            yaxis_opts=opts.AxisOpts(
+                type_="value",
+                name="次数",
+                name_location="end",
+            ),
+            legend_opts=opts.LegendOpts(
+                pos_top="5%",
+                pos_left="center",
+                orient="horizontal",
+            ),
+            tooltip_opts=opts.TooltipOpts(trigger="axis"),
+        )
+        
+        # Display chart
+        st_pyecharts(line)
         
     except Exception as e:
         logger.error(f"Error showing mood trends: {e}")
@@ -283,7 +399,6 @@ def show_writing_frequency(start_date, end_date):
             st.error(t('error.db_connect'))
             return
             
-        # 查询写作频率
         query = """
             SELECT date, COUNT(*) as entry_count
             FROM entries
@@ -298,11 +413,45 @@ def show_writing_frequency(start_date, end_date):
             st.info(t('insights.no_entries'))
             return
             
-        # 使用 plotly 绘制频率图表
-        import plotly.graph_objects as go
+        from pyecharts import options as opts
+        from pyecharts.charts import Bar
+        from streamlit_echarts import st_pyecharts
         
-        # 处理数据...
-        st.plotly_chart(fig)
+        dates, counts = zip(*data)
+        
+        bar = Bar()
+        bar.add_xaxis(dates)
+        bar.add_yaxis(
+            "日记数量",
+            counts,
+            itemstyle_opts=opts.ItemStyleOpts(color='#1976D2'),
+            label_opts=opts.LabelOpts(is_show=False),
+        )
+        
+        bar.set_global_opts(
+            title_opts=opts.TitleOpts(
+                title="写作频率统计",
+                subtitle=f"从 {start_date} 到 {end_date}",
+                title_textstyle_opts=opts.TextStyleOpts(font_family="Microsoft YaHei"),
+            ),
+            xaxis_opts=opts.AxisOpts(
+                type_="category",
+                name="日期",
+                name_location="end",
+                axislabel_opts=opts.LabelOpts(rotate=45),
+            ),
+            yaxis_opts=opts.AxisOpts(
+                type_="value",
+                name="日记数量",
+                name_location="end",
+                min_=0,
+                max_=max(counts) + 1,
+                interval=1,
+            ),
+            tooltip_opts=opts.TooltipOpts(trigger="axis"),
+        )
+        
+        st_pyecharts(bar)
         
     except Exception as e:
         logger.error(f"Error showing writing frequency: {e}")
@@ -365,7 +514,7 @@ def get_entries_by_date(selected_date):
         date_str = selected_date.strftime('%Y-%m-%d')
         logger.debug(f"Formatted date: {date_str}")
         
-        # 添加数据库连接验证
+        # 添加数据库连验证
         logger.debug("Testing database connection...")
         test_cursor = db.execute("SELECT 1")
         test_cursor.fetchone()
@@ -404,116 +553,226 @@ def get_entries_by_date(selected_date):
             db.close()
         return []
 
-def show_filtered_entries(filter_type, filter_params):
-    """Display filtered entries based on selected filter type"""
+def show_filtered_entries(filter_type, local_vars):
+    """Display filtered entries in timeline format"""
     try:
-        logger.debug(f"Fetching entries with filter_type: {filter_type}")
         db = init_db()
         if not db:
-            logger.error("Database connection failed")
             st.error(t('error.db_connect'))
             return
-
-        # 基础查询
+            
+        # 构建基础查询
         query = """
-            SELECT e.id, e.date, e.title, e.content, e.mood, e.weather, 
-                   e.location, e.attachments, e.created_at
+            SELECT e.date, e.title, e.content, e.mood, e.weather, e.location,
+                   GROUP_CONCAT(DISTINCT t.name) as tags,
+                   tp.keywords, tp.sentiment
             FROM entries e
+            LEFT JOIN entry_tags et ON e.id = et.entry_id
+            LEFT JOIN tags t ON et.tag_id = t.id
+            LEFT JOIN topics tp ON e.id = tp.entry_id
         """
+        
+        # 添加过滤条件
+        conditions = []
         params = []
-        where_clauses = []
-
-        # 根据过滤类型构建查询
+        
         if filter_type == t('timeline.date_range'):
-            start_date = filter_params.get('start_date')
-            end_date = filter_params.get('end_date')
-            if start_date and end_date:
-                where_clauses.append("date BETWEEN ? AND ?")
-                params.extend([start_date.strftime('%Y-%m-%d'), 
-                             end_date.strftime('%Y-%m-%d')])
-                logger.debug(f"Date range filter: {start_date} to {end_date}")
-
-        elif filter_type == t('timeline.tags'):
-            selected_tags = filter_params.get('selected_tags', [])
-            if selected_tags:
-                placeholders = ','.join(['?' for _ in selected_tags])
-                query += """
-                    JOIN entry_tags et ON e.id = et.entry_id
-                    JOIN tags t ON et.tag_id = t.id
-                """
-                where_clauses.append(f"t.name IN ({placeholders})")
-                params.extend(selected_tags)
-                logger.debug(f"Selected tags: {selected_tags}")
-
-        elif filter_type == t('timeline.search'):
-            search_query = filter_params.get('search_query', '')
-            if search_query:
-                query += " JOIN entries_fts ON e.id = entries_fts.rowid"
-                where_clauses.append("entries_fts MATCH ?")
-                params.append(search_query)
-                logger.debug(f"Search query: {search_query}")
-
-        # 添加 WHERE 子句
-        if where_clauses:
-            query += " WHERE " + " AND ".join(where_clauses)
-
-        # 添加排序
-        query += " ORDER BY date DESC, created_at DESC"
-
-        logger.debug(f"Executing query: {query}")
-        logger.debug(f"Query parameters: {params}")
-
-        # 执行查询
+            if 'start_date' in local_vars and 'end_date' in local_vars:
+                conditions.append("e.date BETWEEN ? AND ?")
+                params.extend([local_vars['start_date'], local_vars['end_date']])
+                
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+            
+        query += " GROUP BY e.id ORDER BY e.date DESC"
+        
         cursor = db.execute(query, params)
         entries = cursor.fetchall()
-        logger.debug(f"Found {len(entries)} entries")
-
+        
         if not entries:
-            st.info(t('common.no_data'))
+            st.info(t('timeline.no_entries'))
             return
-
-        # 显示条目
+            
+        # 中文月份和星期映射
+        zh_months = {
+            '1': '一月', '2': '二月', '3': '三月', '4': '四月',
+            '5': '五月', '6': '六月', '7': '七月', '8': '八月',
+            '9': '九月', '10': '十月', '11': '十一月', '12': '十二月'
+        }
+        
+        # 修改时间线项目的样式
+        timeline_items = []
         for entry in entries:
-            with st.expander(f"{entry[1]} - {entry[2]}", expanded=False):
-                # 显示内容
-                st.write(entry[3])
+            date, title, content, mood, weather, location, tags, keywords, sentiment = entry
+            date_parts = date.split('-')
+            
+            # 内容区域使用较大的字体，但保持其他元素小巧
+            content_html = f'''
+                <div style="
+                    color: #333;
+                    font-size: 14px;  # Increased back to 14px for better readability
+                    line-height: 1.5;  # Slightly increased for better readability
+                    margin: 6px 0;
+                    font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei';
+                    text-shadow: none;
+                    display: -webkit-box;
+                    -webkit-line-clamp: 3;
+                    -webkit-box-orient: vertical;
+                    overflow: hidden;
+                    background-color: #fafafa;  # Light background to distinguish content
+                    padding: 8px;
+                    border-radius: 4px;
+                ">{content}</div>
+            '''
+            
+            # Keep the title and meta info small
+            title_html = f'''
+                <div style="
+                    font-size: 12px;
+                    font-weight: 500;
+                    color: #1a237e;
+                    margin-bottom: 4px;
+                    font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei';
+                    text-shadow: none;
+                    white-space: nowrap;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                ">{title}</div>
+            '''
+            
+            # Keep meta info and tags small
+            meta_info = []
+            if mood:
+                meta_info.append(f'<span style="background-color: #ffcdd2; padding: 1px 4px; border-radius: 4px; font-size: 10px; margin-right: 4px;">{mood}</span>')
+            if weather:
+                meta_info.append(f'<span style="background-color: #b3e5fc; padding: 1px 4px; border-radius: 4px; font-size: 10px; margin-right: 4px;">{weather}</span>')
+            if location:
+                meta_info.append(f'<span style="background-color: #c8e6c9; padding: 1px 4px; border-radius: 4px; font-size: 10px; margin-right: 4px;">{location}</span>')
+            
+            meta_html = '<div style="margin: 4px 0;">' + ''.join(meta_info) + '</div>'
+            
+            # 标签使用更紧凑的样式
+            tags_html = ''
+            if tags:
+                tag_list = tags.split(',')
+                tags_html = ''.join([
+                    f'''<span style="
+                        display: inline-block;
+                        padding: 1px 6px;
+                        margin: 1px;
+                        border-radius: 8px;
+                        background-color: #e3f2fd;
+                        color: #1565c0;
+                        font-size: 10px;
+                    ">{tag.strip()}</span>'''
+                    for tag in tag_list
+                ])
+            
+            item = {
+                "start_date": {
+                    "year": date_parts[0],
+                    "month": date_parts[1],
+                    "day": date_parts[2]
+                },
+                "text": {
+                    "headline": title_html,
+                    "text": f'''
+                        <div style="
+                            background-color: #ffffff;
+                            padding: 8px;  # Reduced from 12px
+                            border-radius: 6px;
+                            border: 1px solid #e0e0e0;
+                            font-size: 12px;
+                            max-height: 200px;
+                            overflow: hidden;
+                        ">
+                            {meta_html}
+                            {content_html}
+                            <div style="margin-top: 4px;">
+                                {tags_html}
+                            </div>
+                        </div>
+                    '''
+                }
+            }
+            timeline_items.append(item)
+        
+        # Create timeline configuration after timeline_items are populated
+        timeline_config = {
+            "title": {
+                "text": {
+                    "headline": f'<h1 style="color:#1a237e; font-size:20px;">{t("timeline.title")}</h1>',
+                    "text": f'<p style="color:#666; font-size:14px;">{t("timeline.subtitle")}</p>'
+                }
+            },
+            "events": timeline_items
+        }
+        
+        # 更新时间线CSS样式
+        st.markdown("""
+            <style>
+                /* 调整时间线标记的样式 */
+                .tl-timemarker {
+                    min-width: 120px !important;  /* Reduced from 140px */
+                    max-width: 160px !important;  /* Reduced from 180px */
+                }
                 
-                # 显示元数据
-                cols = st.columns(3)
-                with cols[0]:
-                    if entry[4]:  # mood
-                        st.caption(f"{t('editor.mood')}: {entry[4]}")
-                with cols[1]:
-                    if entry[5]:  # weather
-                        st.caption(f"{t('editor.weather')}: {entry[5]}")
-                with cols[2]:
-                    if entry[6]:  # location
-                        st.caption(f"{t('editor.location')}: {entry[6]}")
+                .tl-timemarker-content-container {
+                    width: 120px !important;  /* Reduced from 140px */
+                    min-width: 120px !important;
+                }
                 
-                # 显示附件
-                if entry[7]:  # attachments
-                    try:
-                        attachments = json.loads(entry[7])
-                        if attachments:
-                            st.write(t('editor.attachments'))
-                            image_cols = st.columns(4)
-                            for idx, attachment in enumerate(attachments):
-                                with image_cols[idx % 4]:
-                                    if Path(attachment).suffix.lower() in ALLOWED_EXTENSIONS:
-                                        st.image(f"data/{attachment}")
-                    except json.JSONDecodeError as e:
-                        logger.error(f"Failed to parse attachments JSON: {e}")
-
-    except sqlite3.Error as e:
-        logger.error(f"Database error: {e}", exc_info=True)
-        st.error(t('error.db_query'))
+                /* 调整文本大小和换行 */
+                .tl-headline {
+                    font-size: 11px !important;  /* Reduced from 12px */
+                    line-height: 1.2 !important;
+                    padding: 1px 3px !important;
+                }
+                
+                /* 调整时间线导航栏高度 */
+                .tl-timenav {
+                    height: 120px !important;  /* Reduced from 150px */
+                }
+                
+                /* 调整时间标记的高度 */
+                .tl-timemarker {
+                    height: auto !important;
+                    min-height: 30px !important;  /* Reduced from 35px */
+                }
+                
+                /* 优化时间轴上的日期显示 */
+                .tl-timeaxis-tick {
+                    font-size: 9px !important;  /* Reduced from 10px */
+                    color: #666 !important;
+                }
+                
+                /* 防止文本溢出 */
+                .tl-text-content-container {
+                    max-height: 200px;
+                    overflow-y: auto;
+                }
+                
+                /* 优化时间线整体布局 */
+                .tl-storyslider {
+                    padding: 0 !important;
+                }
+                
+                .tl-text {
+                    width: 100% !important;
+                    max-width: none !important;
+                }
+            </style>
+        """, unsafe_allow_html=True)
+        
+        # Now we can use timeline_config
+        timeline(timeline_config, height=550)
+        
     except Exception as e:
-        logger.error(f"Unexpected error: {e}", exc_info=True)
-        st.error(t('error.unexpected'))
+        logger.error(f"Error displaying timeline: {e}", exc_info=True)
+        st.error(t('error.timeline_failed'))
     finally:
         if 'db' in locals() and db is not None:
             db.close()
-            logger.debug("Database connection closed")
 
 def show_mood_distribution(start_date, end_date):
     """显示心情分布统计"""
@@ -523,7 +782,6 @@ def show_mood_distribution(start_date, end_date):
             st.error(t('error.db_connect'))
             return
             
-        # 查询心情数据
         query = """
             SELECT mood, COUNT(*) as count
             FROM entries
@@ -539,24 +797,44 @@ def show_mood_distribution(start_date, end_date):
             st.info(t('insights.no_mood_data'))
             return
             
-        # 使用 plotly 绘制饼图
-        import plotly.graph_objects as go
+        from pyecharts import options as opts
+        from pyecharts.charts import Pie
+        from streamlit_echarts import st_pyecharts
         
+        # 准备数据
         moods, counts = zip(*data)
-        fig = go.Figure(data=[go.Pie(
-            labels=moods,
-            values=counts,
-            hole=.3,
-            title=t('insights.mood_distribution')
-        )])
         
-        fig.update_layout(
-            showlegend=True,
-            height=400,
-            margin=dict(t=0, b=0, l=0, r=0)
+        # 创建饼图
+        c = (
+            Pie()
+            .add(
+                "",
+                [list(z) for z in zip(moods, counts)],
+                radius=["40%", "75%"],
+            )
+            .set_global_opts(
+                title_opts=opts.TitleOpts(
+                    title="心情分布",
+                    subtitle=f"从 {start_date} 到 {end_date}",
+                    title_textstyle_opts=opts.TextStyleOpts(font_family="Microsoft YaHei"),
+                ),
+                legend_opts=opts.LegendOpts(
+                    orient="vertical",
+                    pos_top="15%",
+                    pos_left="2%",
+                    textstyle_opts=opts.TextStyleOpts(font_family="Microsoft YaHei"),
+                ),
+            )
+            .set_series_opts(
+                label_opts=opts.LabelOpts(
+                    formatter="{b}: {c} ({d}%)",
+                    font_family="Microsoft YaHei",
+                )
+            )
         )
         
-        st.plotly_chart(fig)
+        # 显示图表
+        st_pyecharts(c)
         
     except Exception as e:
         logger.error(f"Error showing mood distribution: {e}")
@@ -575,7 +853,7 @@ def show_topic_wordcloud(start_date, end_date):
             
         # 查询主题数据
         query = """
-            SELECT keywords
+            SELECT keywords, content
             FROM topics t
             JOIN entries e ON t.entry_id = e.id
             WHERE e.date BETWEEN ? AND ?
@@ -587,26 +865,52 @@ def show_topic_wordcloud(start_date, end_date):
             st.info(t('insights.no_topics'))
             return
             
-        # 处理关键词数据
-        from wordcloud import WordCloud
-        import matplotlib.pyplot as plt
+        # 使用jieba分词和pyecharts成词云
+        import jieba
+        from pyecharts import options as opts
+        from pyecharts.charts import WordCloud as PyeWordCloud
+        from streamlit_echarts import st_pyecharts
         
-        # 合并所有关键词
-        all_keywords = ' '.join([kw for row in data for kw in json.loads(row[0])])
+        # 处理关键词和内容
+        text = ''
+        for keywords, content in data:
+            if keywords:
+                text += ' ' + ' '.join(json.loads(keywords))
+            if content:
+                text += ' ' + content
+                
+        # 使用jieba分词
+        words = jieba.cut(text)
+        word_freq = {}
+        for word in words:
+            if len(word.strip()) > 1:  # 只统计长度大于1的词
+                word_freq[word] = word_freq.get(word, 0) + 1
+                
+        # 转换为pyecharts需要的格式
+        words_data = [(word, freq) for word, freq in word_freq.items()]
+        words_data.sort(key=lambda x: x[1], reverse=True)
+        words_data = words_data[:100]  # 取前100个词
         
-        # 生成词云
-        wordcloud = WordCloud(
-            width=800, 
-            height=400,
-            background_color='white',
-            max_words=100
-        ).generate(all_keywords)
+        # 创建词云图
+        c = (
+            PyeWordCloud()
+            .add(
+                "",
+                words_data,
+                word_size_range=[15, 80],
+                textstyle_opts=opts.TextStyleOpts(font_family="Microsoft YaHei"),
+            )
+            .set_global_opts(
+                title_opts=opts.TitleOpts(
+                    title="主题词云",
+                    subtitle="基于日记内容分析",
+                    title_textstyle_opts=opts.TextStyleOpts(font_family="Microsoft YaHei"),
+                ),
+            )
+        )
         
         # 显示词云
-        fig, ax = plt.subplots()
-        ax.imshow(wordcloud, interpolation='bilinear')
-        ax.axis('off')
-        st.pyplot(fig)
+        st_pyecharts(c)
         
     except Exception as e:
         logger.error(f"Error showing topic wordcloud: {e}")
@@ -737,11 +1041,11 @@ def show_topic_trends(start_date, end_date):
             return
             
         query = """
-            SELECT t.topic, e.date, COUNT(*) as count
+            SELECT e.date, t.topic, COUNT(*) as count
             FROM topics t
             JOIN entries e ON t.entry_id = e.id
             WHERE e.date BETWEEN ? AND ?
-            GROUP BY t.topic, e.date
+            GROUP BY e.date, t.topic
             ORDER BY e.date, count DESC
         """
         cursor = db.execute(query, (start_date, end_date))
@@ -751,34 +1055,44 @@ def show_topic_trends(start_date, end_date):
             st.info(t('insights.no_topics'))
             return
             
-        # 使用 plotly 绘制趋势图
-        import plotly.graph_objects as go
+        from pyecharts import options as opts
+        from pyecharts.charts import ThemeRiver
+        from streamlit_echarts import st_pyecharts
         
-        # 处理数据为时间序列格式
-        topics_data = {}
-        for topic, date, count in data:
-            if topic not in topics_data:
-                topics_data[topic] = {'dates': [], 'counts': []}
-            topics_data[topic]['dates'].append(date)
-            topics_data[topic]['counts'].append(count)
+        # 转换数据格式为主题河流图所需的格式
+        theme_data = []
+        for date, topic, count in data:
+            theme_data.append([date, count, topic])
         
-        fig = go.Figure()
-        for topic, values in topics_data.items():
-            fig.add_trace(go.Scatter(
-                x=values['dates'],
-                y=values['counts'],
-                name=topic,
-                mode='lines+markers'
-            ))
-        
-        fig.update_layout(
-            title=t('insights.topic_trends'),
-            xaxis_title=t('insights.date'),
-            yaxis_title=t('insights.count'),
-            height=500
+        c = (
+            ThemeRiver()
+            .add(
+                series_name=[],
+                data=theme_data,
+                singleaxis_opts=opts.SingleAxisOpts(
+                    pos_top="50",
+                    pos_bottom="50",
+                    type_="time",
+                ),
+            )
+            .set_global_opts(
+                title_opts=opts.TitleOpts(
+                    title="主题变化趋势",
+                    subtitle=f"从 {start_date} 到 {end_date}",
+                ),
+                tooltip_opts=opts.TooltipOpts(
+                    trigger="axis",
+                    axis_pointer_type="line"
+                ),
+                legend_opts=opts.LegendOpts(
+                    pos_top="15%",
+                    orient="horizontal",
+                    textstyle_opts=opts.TextStyleOpts(font_family="Microsoft YaHei"),
+                ),
+            )
         )
         
-        st.plotly_chart(fig)
+        st_pyecharts(c)
         
     except Exception as e:
         logger.error(f"Error showing topic trends: {e}")
@@ -832,41 +1146,91 @@ def show_growth_indicators(start_date, end_date):
             st.error(t('error.db_connect'))
             return
             
-        # 获取写作量增长
+        # 获取写作量数据
         writing_query = """
-            SELECT date, LENGTH(content) as length
+            SELECT date, LENGTH(content) as length,
+                   COUNT(*) as entry_count
             FROM entries
             WHERE date BETWEEN ? AND ?
+            GROUP BY date
             ORDER BY date
         """
         cursor = db.execute(writing_query, (start_date, end_date))
         writing_data = cursor.fetchall()
         
         if writing_data:
-            st.subheader(t('insights.writing_growth'))
-            # 计算写作量趋势
-            lengths = [x[1] for x in writing_data]
-            avg_length = sum(lengths) / len(lengths)
-            st.metric(
-                t('insights.avg_length'),
-                f"{int(avg_length)} {t('insights.characters')}"
+            from pyecharts import options as opts
+            from pyecharts.charts import Line, Grid
+            from streamlit_echarts import st_pyecharts
+            
+            dates = [row[0] for row in writing_data]
+            lengths = [row[1] for row in writing_data]
+            counts = [row[2] for row in writing_data]
+            
+            # 创建写作量趋势图
+            line = (
+                Line()
+                .add_xaxis(dates)
+                .add_yaxis(
+                    "字数",
+                    lengths,
+                    symbol_size=8,
+                    color="#1976D2",
+                    is_smooth=True,
+                )
+                .add_yaxis(
+                    "日记数",
+                    counts,
+                    symbol_size=8,
+                    color="#4CAF50",
+                    is_smooth=True,
+                )
+                .set_global_opts(
+                    title_opts=opts.TitleOpts(
+                        title="写作成长趋势",
+                        subtitle=f"从 {start_date} 到 {end_date}",
+                        title_textstyle_opts=opts.TextStyleOpts(font_family="Microsoft YaHei"),
+                    ),
+                    xaxis_opts=opts.AxisOpts(
+                        type_="category",
+                        name="日期",
+                        name_location="end",
+                        axislabel_opts=opts.LabelOpts(rotate=45),
+                    ),
+                    yaxis_opts=opts.AxisOpts(
+                        type_="value",
+                        name="数量",
+                        name_location="end",
+                        splitline_opts=opts.SplitLineOpts(is_show=True),
+                    ),
+                    legend_opts=opts.LegendOpts(
+                        pos_top="5%",
+                        pos_left="center",
+                        orient="horizontal",
+                    ),
+                    tooltip_opts=opts.TooltipOpts(trigger="axis"),
+                )
             )
             
-        # 获取情感变化
-        mood_query = """
-            SELECT date, mood
-            FROM entries
-            WHERE date BETWEEN ? AND ?
-                AND mood IS NOT NULL
-            ORDER BY date
-        """
-        cursor = db.execute(mood_query, (start_date, end_date))
-        mood_data = cursor.fetchall()
-        
-        if mood_data:
-            st.subheader(t('insights.mood_growth'))
-            # 展示情感变化图表
+            st_pyecharts(line)
             
+            # 显示统计指标
+            col1, col2 = st.columns(2)
+            with col1:
+                avg_length = sum(lengths) / len(lengths)
+                st.metric(
+                    "平均字数",
+                    f"{int(avg_length)}",
+                    delta=f"{int(lengths[-1] - avg_length)}"
+                )
+            with col2:
+                avg_count = sum(counts) / len(counts)
+                st.metric(
+                    "平均日记数",
+                    f"{avg_count:.1f}",
+                    delta=f"{counts[-1] - avg_count:.1f}"
+                )
+        
     except Exception as e:
         logger.error(f"Error showing growth indicators: {e}")
         st.error(t('error.analysis_failed'))

@@ -1,7 +1,9 @@
 version: '3.8'
 services:
   streamlit:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     ports:
       - "8501:8501"
     volumes:
@@ -9,19 +11,12 @@ services:
       - diary_data:/app/data
     environment:
       - PYTHONPATH=/app
-    user: root
+      - PYTHONUNBUFFERED=1
     command: >
       bash -c "
-        mkdir -p /app/data &&
-        chown -R sshuser:sshuser /app/data &&
-        chmod -R 777 /app/data &&
-        su sshuser -c 'streamlit run src/app.py --server.address 0.0.0.0'
+        python src/mock_data.py &&
+        streamlit run src/app.py --server.address 0.0.0.0
       "
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8501"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
 
 volumes:
   diary_data:

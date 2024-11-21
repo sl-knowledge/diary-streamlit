@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 import logging
 import sys
-from src.config import Config
+from config import Config
 
 # 设置日志
 logging.basicConfig(level=logging.DEBUG)
@@ -21,20 +21,13 @@ def ensure_data_dir():
         data_dir = base_dir / 'data'
         data_dir.mkdir(exist_ok=True)
         
-        # 确保数据目录有正确的权限
-        os.chmod(data_dir, 0o777)
-        
         db_path = data_dir / 'diary.db'
         if not db_path.exists():
-            # 创建空数据库文件并设置权限
+            # 创建空数据库文件
             db_path.touch()
-            os.chmod(db_path, 0o666)
             
         logger.debug(f"Data directory created/verified: {data_dir.absolute()}")
         logger.debug(f"Database path: {db_path.absolute()}")
-        logger.debug(f"Current user: {os.getuid()}:{os.getgid()}")
-        logger.debug(f"Data dir permissions: {oct(os.stat(data_dir).st_mode)[-3:]}")
-        logger.debug(f"DB file permissions: {oct(os.stat(db_path).st_mode)[-3:] if db_path.exists() else 'file not exists'}")
         
         return True
     except Exception as e:
@@ -105,19 +98,36 @@ def generate_mock_data():
     """生成模拟数据"""
     try:
         config = Config()
+        logger.debug("Starting mock data generation...")
         
-        # 确保数据目录存在
-        config.ensure_directories()
+        # 1. 确保数据目录存在
+        if not ensure_data_dir():
+            logger.error("Failed to create/verify data directory")
+            return False
             
-        # 使用配置中的路径
+        # 2. 初始化数据库（创建表结构）
+        if not init_database():
+            logger.error("Failed to initialize database")
+            return False
+            
+        # 3. 连接数据库
         db_path = config.DB_PATH
-        logger.debug(f"Connecting to database at: {db_path.absolute()}")
+        logger.debug(f"Connecting to database at: {db_path}")
         db = sqlite3.connect(str(db_path))
         
-        # 清空现有数据（可选）
+        # 4. 验证表是否存在
+        cursor = db.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='topics'")
+        if not cursor.fetchone():
+            logger.error("Required tables do not exist")
+            return False
+            
+        # 5. 清空现有数据
         logger.debug("Clearing existing data...")
         db.executescript('''
             DELETE FROM topics;
+            DELETE FROM entry_tags;
+            DELETE FROM tags;
             DELETE FROM entries;
         ''')
         
@@ -238,6 +248,12 @@ def generate_mock_data():
         # 提交更改
         db.commit()
         logger.info("Mock data generated successfully")
+        
+        # 6. 验证数据生成
+        if not verify_mock_data():
+            logger.error("Data verification failed")
+            return False
+            
         return True
         
     except Exception as e:
