@@ -215,7 +215,21 @@ def check_password():
     return True
 
 def main():
-    st.set_page_config(page_title=t('app.title'), layout="wide")
+    # Add this before st.set_page_config
+    st.markdown("""
+        <link rel="stylesheet" href="https://cdn.staticfile.org/font-awesome/4.7.0/css/font-awesome.css">
+        <link rel="stylesheet" href="https://fonts.googleapis.cnpmjs.org/css2?family=Roboto:wght@400;500&display=swap">
+    """, unsafe_allow_html=True)
+    
+    st.set_page_config(
+        page_title=t('app.title'), 
+        layout="wide",
+        menu_items={
+            'Get Help': None,
+            'Report a bug': None,
+            'About': '日记本 v1.0'
+        }
+    )
     
     # Add password check before showing content
     if not check_password():
@@ -594,7 +608,7 @@ def show_editor():
     with col1:
         mood = st.selectbox(
             "心情",
-            ['开���', '平静', '疲惫', '兴奋', '焦虑', '伤心'],
+            ['开', '平静', '疲惫', '兴奋', '焦虑', '伤心'],
             index=None,
             placeholder="选择心情..."
         )
