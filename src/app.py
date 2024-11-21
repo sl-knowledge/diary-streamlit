@@ -121,9 +121,47 @@ def init_app():
         config.DATA_DIR.mkdir(exist_ok=True)
         config.UPLOAD_DIR.mkdir(exist_ok=True)
         
-        # Check if database exists and has data
+        # Initialize database and create tables first
         db = init_db()
         if db:
+            # Create tables if they don't exist
+            db.executescript('''
+                CREATE TABLE IF NOT EXISTS entries (
+                    id TEXT PRIMARY KEY,
+                    date TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    content TEXT,
+                    attachments TEXT,
+                    mood TEXT,
+                    weather TEXT,
+                    location TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                
+                CREATE TABLE IF NOT EXISTS tags (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL UNIQUE
+                );
+                
+                CREATE TABLE IF NOT EXISTS entry_tags (
+                    entry_id TEXT,
+                    tag_id TEXT,
+                    PRIMARY KEY (entry_id, tag_id),
+                    FOREIGN KEY (entry_id) REFERENCES entries(id) ON DELETE CASCADE,
+                    FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
+                );
+                
+                CREATE TABLE IF NOT EXISTS topics (
+                    id TEXT PRIMARY KEY,
+                    entry_id TEXT,
+                    topic TEXT,
+                    keywords TEXT,
+                    sentiment REAL,
+                    FOREIGN KEY (entry_id) REFERENCES entries(id) ON DELETE CASCADE
+                );
+            ''')
+            
+            # Now check if we need to generate mock data
             cursor = db.execute("SELECT COUNT(*) FROM entries")
             count = cursor.fetchone()[0]
             if count == 0:
@@ -556,7 +594,7 @@ def show_editor():
     with col1:
         mood = st.selectbox(
             "心情",
-            ['开心', '平静', '疲惫', '兴奋', '焦虑', '伤心'],
+            ['开���', '平静', '疲惫', '兴奋', '焦虑', '伤心'],
             index=None,
             placeholder="选择心情..."
         )
