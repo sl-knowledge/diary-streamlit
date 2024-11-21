@@ -659,6 +659,23 @@ def show_filtered_entries(filter_type, local_vars):
             if 'start_date' in local_vars and 'end_date' in local_vars:
                 conditions.append("e.date BETWEEN ? AND ?")
                 params.extend([local_vars['start_date'], local_vars['end_date']])
+        elif filter_type == t('timeline.tags'):
+            if 'selected_tags' in local_vars and local_vars['selected_tags']:
+                placeholders = ','.join(['?' for _ in local_vars['selected_tags']])
+                conditions.append(f"t.name IN ({placeholders})")
+                params.extend(local_vars['selected_tags'])
+        elif filter_type == t('timeline.search'):
+            if 'search_query' in local_vars and local_vars['search_query']:
+                search_term = f"%{local_vars['search_query']}%"
+                conditions.append("""
+                    (e.title LIKE ? OR 
+                     e.content LIKE ? OR 
+                     e.mood LIKE ? OR 
+                     e.weather LIKE ? OR 
+                     e.location LIKE ? OR 
+                     t.name LIKE ?)
+                """)
+                params.extend([search_term] * 6)  # Add search term for each field
                 
         if conditions:
             query += " WHERE " + " AND ".join(conditions)
@@ -668,7 +685,20 @@ def show_filtered_entries(filter_type, local_vars):
         cursor = db.execute(query, params)
         entries = cursor.fetchall()
         
-        if not entries:
+        # Show result count based on filter type
+        if filter_type == t('timeline.search') and 'search_query' in local_vars and local_vars['search_query']:
+            if entries:
+                st.success(f"找到 {len(entries)} 条相关日记")
+            else:
+                st.info("未找到相关日记")
+                return
+        elif filter_type == t('timeline.tags') and 'selected_tags' in local_vars and local_vars['selected_tags']:
+            if entries:
+                st.success(f"找到 {len(entries)} 条带有所选标签的日记")
+            else:
+                st.info("未找到带有所选标签的日记")
+                return
+        elif not entries:
             st.info(t('timeline.no_entries'))
             return
             
@@ -691,14 +721,20 @@ def show_filtered_entries(filter_type, local_vars):
             
             # 转换为中文日期格式
             dt = datetime.strptime(date, '%Y-%m-%d')
-            chinese_date = f"{zh_months[str(int(date_parts[1]))]} {int(date_parts[2])}日 {zh_weekdays[dt.strftime('%w')]}"
+            weekday = dt.strftime('%w')  # 0 is Sunday, 6 is Saturday
+            chinese_date = f"{zh_months[str(int(date_parts[1]))]} {int(date_parts[2])}日 {zh_weekdays[weekday]}"
             
-            # 在标题中添加中文日期
+            # 根据是否是周末设置不同的背景颜色
+            is_weekend = weekday in ['0', '6']
+            background_color = '#fff5f5' if is_weekend else '#ffffff'  # 周末使用浅红色背景
+            border_color = '#ffebee' if is_weekend else '#e0e0e0'     # 周末使用红色边框
+            
+            # 在标题中添加中文日期，周末使用不同样式
             title_html = f'''
                 <div style="
                     font-size: 12px;
                     font-weight: 500;
-                    color: #1a237e;
+                    color: {('#d32f2f' if is_weekend else '#1a237e')};  # 周末使用红色字体
                     margin-bottom: 4px;
                     font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei';
                     text-shadow: none;
@@ -708,7 +744,7 @@ def show_filtered_entries(filter_type, local_vars):
                 ">{title}</div>
                 <div style="
                     font-size: 10px;
-                    color: #666;
+                    color: {('#e57373' if is_weekend else '#666')};
                     margin-bottom: 4px;
                 ">{chinese_date}</div>
             '''
@@ -770,10 +806,10 @@ def show_filtered_entries(filter_type, local_vars):
                     "headline": title_html,
                     "text": f'''
                         <div style="
-                            background-color: #ffffff;
-                            padding: 8px;  # Reduced from 12px
+                            background-color: {background_color};
+                            padding: 8px;
                             border-radius: 6px;
-                            border: 1px solid #e0e0e0;
+                            border: 1px solid {border_color};
                             font-size: 12px;
                             max-height: 200px;
                             overflow: hidden;
@@ -789,7 +825,7 @@ def show_filtered_entries(filter_type, local_vars):
             }
             timeline_items.append(item)
         
-        # Create timeline configuration after timeline_items are populated
+        # Create timeline configuration before using it
         timeline_config = {
             "title": {
                 "text": {
@@ -805,58 +841,57 @@ def show_filtered_entries(filter_type, local_vars):
             <style>
                 /* 调整时间线标记的样式 */
                 .tl-timemarker {
-                    min-width: 120px !important;  /* Reduced from 140px */
-                    max-width: 160px !important;  /* Reduced from 180px */
+                    min-width: 120px !important;
+                    max-width: 160px !important;
                 }
                 
                 .tl-timemarker-content-container {
-                    width: 120px !important;  /* Reduced from 140px */
+                    width: 120px !important;
                     min-width: 120px !important;
                 }
                 
                 /* 调整文本大小和换行 */
                 .tl-headline {
-                    font-size: 11px !important;  /* Reduced from 12px */
+                    font-size: 11px !important;
                     line-height: 1.2 !important;
-                    padding: 1px 3px !important;
+                    padding: 2px 4px !important;
                 }
                 
                 /* 调整时间线导航栏高度 */
                 .tl-timenav {
-                    height: 120px !important;  /* Reduced from 150px */
+                    height: 180px !important;  /* Increased height */
                 }
                 
                 /* 调整时间标记的高度 */
                 .tl-timemarker {
                     height: auto !important;
-                    min-height: 30px !important;  /* Reduced from 35px */
+                    min-height: 65px !important;  /* Increased height */
+                }
+                
+                .tl-timemarker-content-container {
+                    height: auto !important;
+                    min-height: 65px !important;  /* Increased height */
                 }
                 
                 /* 优化时间轴上的日期显示 */
                 .tl-timeaxis-tick {
-                    font-size: 9px !important;  /* Reduced from 10px */
+                    font-size: 10px !important;
                     color: #666 !important;
                 }
                 
-                /* 防止文本溢出 */
-                .tl-text-content-container {
-                    max-height: 200px;
-                    overflow-y: auto;
+                /* 确保标记之间有足够间距 */
+                .tl-timemarker {
+                    margin: 0 2px !important;
                 }
                 
-                /* 优化时间线整体布局 */
-                .tl-storyslider {
-                    padding: 0 !important;
-                }
-                
-                .tl-text {
-                    width: 100% !important;
-                    max-width: none !important;
+                /* 优化时间线容器样式 */
+                .tl-timeline {
+                    font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei' !important;
                 }
             </style>
         """, unsafe_allow_html=True)
         
-        # Now we can use timeline_config
+        # Now use the timeline_config
         timeline(timeline_config, height=550)
         
     except Exception as e:
